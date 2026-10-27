@@ -1,0 +1,219 @@
+import { Injectable, Logger } from "@nestjs/common";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { PAYMENT_PENALTY_AMOUNT } from "src/payment/payment.service";
+// import { ReservationService } from "src/reservation/reservation.service";
+import { FormatterService } from "src/services/formatter/formatter.service";
+import { MessagingService } from "src/services/messaging/messaging.service";
+import { MtzService } from "src/services/mtz/mtz.service";
+import { PrismaService } from "src/services/prisma/prisma.service";
+
+@Injectable()
+export class CronService {
+  constructor(
+    private prismaService: PrismaService,
+    private mtzService: MtzService,
+    private formatterService: FormatterService,
+    // private reservationService: ReservationService,
+    private messagingService: MessagingService,
+  ) {}
+
+  private readonly logger = new Logger(CronService.name, { timestamp: true });
+
+  @Cron(CronExpression.EVERY_10_SECONDS, { timeZone: "Asia/Manila" })
+  async onSendContractPaymentReminder() {
+    try {
+      const contractsResponse = await this.prismaService.contract.findMany({
+        where: {
+          AND: [
+            {
+              status: "ON_GOING",
+            },
+            {
+              paymentType: "INSTALLMENT",
+            },
+          ],
+        },
+        include: {
+          client: true,
+          lot: {
+            include: {
+              block: {
+                include: {
+                  phase: {
+                    include: {
+                      project: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!contractsResponse.length) {
+        this.logger.log("No on-going installment contracts found.");
+        return;
+      }
+
+      this.logger.log(
+        `Validating ${contractsResponse.length} contracts due...`,
+      );
+
+      await Promise.all(
+        contractsResponse.map(
+          async ({
+            id,
+            nextPaymentDate,
+            downPaymentStatus,
+            totalMonthlyDown,
+            totalMonthly,
+            client,
+            lot,
+          }) => {
+            const currentDate = this.mtzService.mtz().startOf("day");
+            const parsedNextPaymentDate = this.mtzService
+              .mtz(nextPaymentDate, "dateTimeUTCZ")
+              .startOf("day");
+
+            const daysDiff = currentDate.diff(parsedNextPaymentDate, "days");
+
+            const isInDueDate = daysDiff >= -2 && daysDiff <= -1;
+            const isDueDateToday = daysDiff === 0;
+            const isOverDue = daysDiff > 0;
+
+            const totalMonthlyPaymentAmount =
+              downPaymentStatus === "ON_GOING"
+                ? totalMonthlyDown
+                : totalMonthly;
+
+            const formattedMonthlyPaymentAmount =
+              this.formatterService.onParseToPhp(
+                totalMonthlyPaymentAmount || 0,
+              );
+
+            if (!client) return;
+            const { email, firstName, lastName } = client;
+            const { title: lotTitle, block } = lot || {};
+            const { title: blockTitle, phase } = block || {};
+            const { title: phaseTitle, project } = phase || {};
+            const { projectName } = project || {};
+
+            if (isInDueDate) {
+              console.log({
+                name: `${firstName} ${lastName}`,
+                daysDiff,
+                amount: formattedMonthlyPaymentAmount,
+                type: "in due date",
+              });
+              // await this.messagingService.onSendPaymentReminderInDueDate({
+              //   email,
+              //   amount: formattedMonthlyPaymentAmount,
+              //   dueDate: daysDiff,
+              // });
+            } else if (isDueDateToday) {
+              console.log({
+                name: `${firstName} ${lastName}`,
+                daysDiff,
+                amount: formattedMonthlyPaymentAmount,
+                type: "due today",
+              });
+              // await this.messagingService.onSendPaymentReminderTodayDueDate({
+              //   email,
+              //   amount: formattedMonthlyPaymentAmount,
+              // });
+            } else if (isOverDue) {
+              const monthsPassed = currentDate.diff(
+                parsedNextPaymentDate,
+                "months",
+              );
+
+              // const weeksPassed = Math.trunc(Math.abs(daysDiff) / 7);
+              const computedPenaltyAmount =
+                (totalMonthlyPaymentAmount || 0) *
+                PAYMENT_PENALTY_AMOUNT *
+                monthsPassed;
+
+              const computedTotalMonthlyPaymentAmount =
+                (totalMonthlyPaymentAmount || 0) + computedPenaltyAmount;
+
+              const formattedComputedTotalMonthlyPaymentAmount =
+                this.formatterService.onParseToPhp(
+                  computedTotalMonthlyPaymentAmount,
+                );
+
+              const formattedPenaltyAmount = this.formatterService.onParseToPhp(
+                computedPenaltyAmount,
+              );
+
+              const formattedComputedPenaltyAmount =
+                this.formatterService.onParseToPhp(computedPenaltyAmount);
+
+              console.log({
+                name: `${firstName} ${lastName}`,
+                daysDiff,
+                amount: formattedComputedPenaltyAmount,
+                penalty: formattedPenaltyAmount,
+                monthsPassed,
+                type: "over due",
+              });
+
+              // if (!weeksPassed) {
+              //   await this.messagingService.onSendPaymentReminderOverDueDate({
+              //     email,
+              //     amount: formattedComputedTotalMonthlyPaymentAmount,
+              //     penalty: formattedPenaltyAmount,
+              //   });
+              // } else {
+              //   await this.messagingService.onSendPaymentReminderOverDueDateWeekPast(
+              //     {
+              //       email,
+              //       amount: formattedComputedTotalMonthlyPaymentAmount,
+              //       weeksPassed,
+              //       penalty: formattedComputedPenaltyAmount,
+              //     },
+              //   );
+              // }
+            }
+          },
+        ),
+      );
+      this.logger.log(`${contractsResponse.length} contracts due validated.`);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // @Cron(CronExpression.EVERY_DAY_AT_10AM, { timeZone: "Asia/Manila" })
+  // async onCheckReservationValidity() {
+  //   try {
+  //     await this.prismaService.$transaction(async prisma => {
+  //       const reservationsResponse = await prisma.reservation.findMany({
+  //         where: {
+  //           status: "ACTIVE",
+  //         },
+  //       });
+
+  //       if (!reservationsResponse.length) {
+  //         this.logger.log("No active reservations found.");
+  //         return;
+  //       }
+
+  //       this.logger.log("Checking reservation validity...");
+
+  //       await Promise.all(
+  //         reservationsResponse.map(async props => {
+  //           await this.reservationService.onValidateReservationValidity(
+  //             props,
+  //             prisma,
+  //           );
+  //         }),
+  //       );
+
+  //       this.logger.log("Checking reservation validity completed.");
+  //     });
+  //   } catch (error) {
+  //     throw error;
+  //   }
+  // }
+}

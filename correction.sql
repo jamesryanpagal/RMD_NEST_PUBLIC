@@ -1,0 +1,155 @@
+-- ? Used to correct the penalty amount and penalty count in the Payment table.
+
+-- WITH calc AS (
+-- 	SELECT
+-- 	  q.*,
+-- 	  (q."baseAmount" * 0.005) * q."monthsDelayed" AS "totalPenaltyAmount"
+-- 	FROM (
+-- 	  SELECT 
+-- 	    p.id,
+-- 	    p."penalized",
+-- 	    p."targetDueDate",
+-- 		p."dateCreated" AS "paymentDate",
+-- 	    p."transactionType",
+-- 	    c."totalMonthlyDown",
+-- 	    c."totalDownPayment",
+-- 	    c."totalMonthly",
+-- 	    CASE
+-- 	      WHEN p."transactionType" = 'PARTIAL_DOWN_PAYMENT'
+-- 	        THEN COALESCE(c."totalMonthlyDown", 0)
+-- 	      WHEN p."transactionType" = 'FULL_DOWN_PAYMENT'
+-- 	        THEN COALESCE(c."totalDownPayment", 0)
+-- 	      WHEN p."transactionType" = 'MONTHLY_PAYMENT'
+-- 	        THEN COALESCE(c."totalMonthly", 0)
+-- 	      ELSE 0
+-- 	    END AS "baseAmount",
+-- 	    GREATEST(
+-- 	      0,
+-- 	      (
+-- 	        EXTRACT(
+-- 	          YEAR FROM age(
+-- 	            p."dateCreated"::date,
+-- 	            p."targetDueDate"::date
+-- 	          )
+-- 	        ) * 12
+-- 	        +
+-- 	        EXTRACT(
+-- 	          MONTH FROM age(
+-- 	            p."dateCreated"::date,
+-- 	            p."targetDueDate"::date
+-- 	          )
+-- 	        )
+-- 	      )
+-- 	    )::int AS "monthsDelayed"
+-- 	  FROM "Payment" p
+-- 	  INNER JOIN "Contract" c ON c."id" = p."contractId"
+-- 	  WHERE p."penalized" = true
+-- 	  ORDER BY p."dateCreated" DESC
+-- 	) AS q
+-- )
+-- UPDATE "Payment" p
+-- SET 
+-- 	"penaltyAmount" = calc."totalPenaltyAmount",
+-- 	"penaltyCount" = calc."monthsDelayed"
+-- FROM calc
+-- WHERE p.id = calc.id;
+
+-- ? ==================================================
+
+-- ? Used to connect reservation to contract
+
+-- WITH ucrf AS (
+-- 	SELECT 
+-- 		p."id",
+-- 		p."reservationId",
+-- 		c."id" as "connectedContractId"
+-- 	FROM "Payment" p
+-- 	INNER JOIN "Reservation" r ON r."id" = p."reservationId"
+-- 	INNER JOIN "Contract" c ON c."lotId" = r."lotId" AND c."clientId" = r."clientId"
+-- 	WHERE 
+-- 		p."transactionType" = 'RESERVATION_FEE' AND
+-- 		p."contractId" IS NULL AND
+-- 		p."status" = 'ACTIVE' AND
+-- 		r."status" = 'DONE'
+-- )
+
+-- UPDATE "Payment" p
+-- SET
+-- 	"contractId" = ucrf."connectedContractId"
+-- FROM ucrf
+-- WHERE p."id" = ucrf."id";
+
+-- UPDATE "Reservation" r
+-- SET
+-- 	"contractId" = ucrf."connectedContractId"
+-- FROM ucrf
+-- WHERE r."id" = ucrf."reservationId"
+
+-- ? ==================================================
+
+-- ? Used to correct the agent commission total
+
+-- BEGIN;
+
+-- WITH calc AS (
+-- 	SELECT
+-- 		q.*,
+-- 		ROUND(((q."agentCommissionPercentage"::numeric / 100) * q."tcp")::numeric, 2) AS "agentCommissionNewTotal"
+-- 	FROM (
+-- 		SELECT 
+-- 			ac.*,
+-- 			c."agentCommission",
+-- 			CASE
+-- 				WHEN c."agentCommission" = 'FIVE'
+-- 					THEN 5
+-- 				WHEN c."agentCommission" = 'SEVEN'
+-- 					THEN 7
+-- 				WHEN c."agentCommission" = 'TEN'
+-- 					THEN 10
+-- 				WHEN c."agentCommission" = 'TWELVE'
+-- 					THEN 12
+-- 				WHEN c."agentCommission" = 'FIFTEEN'
+-- 					THEN 15
+-- 				ELSE 0
+-- 			END AS "agentCommissionPercentage",
+-- 			c."agentCommissionTotal",
+-- 			c."tcp"
+-- 		FROM "AgentCommission" ac
+-- 		INNER JOIN "Contract" c ON c."id" = ac."contractId"
+-- 		WHERE 
+-- 			ac."status" = 'PENDING'
+-- 	) AS q
+-- )
+
+-- UPDATE "Contract" c
+-- SET
+-- 	"agentCommissionTotal" = calc."agentCommissionNewTotal"
+-- FROM calc
+-- WHERE c."id" = calc."contractId";
+
+-- COMMIT;
+
+-- ? ==================================================
+
+-- ? Used to correct the username in the User table
+
+-- WITH generate AS (
+-- 	SELECT
+-- 		q.*,
+-- 		LOWER("firstName") || '_' || LOWER("lastName") || '@' || FLOOR(RANDOM() * 900) + 100 AS "generatedUsername"
+-- 	FROM (
+-- 		SELECT 
+-- 			u.id, 
+-- 			u."firstName", 
+-- 			u."lastName"
+-- 		FROM "User" u
+-- 	) AS q
+-- )
+
+-- UPDATE "User" u
+-- SET
+-- 	"username" = g."generatedUsername"
+-- FROM generate g
+-- WHERE u.id = g.id
+
+-- ? ==================================================
