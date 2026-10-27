@@ -1,98 +1,120 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# RMD NEST — Real Estate Lot Sales Management API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Backend API for a real estate company's lot sales operations: managing subdivision inventory, client reservations, contracts, installment payments, and agent commissions. Built with **NestJS**, **Prisma**, and **PostgreSQL**, and deployed in production on AWS EC2.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+> This repository is shared for **portfolio and code review purposes only**. Environment files, deployment configuration, and production data are intentionally excluded.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Tech Stack
 
-## Project setup
+| Layer | Technology |
+| --- | --- |
+| Framework | NestJS 11 (TypeScript) |
+| Database | PostgreSQL + Prisma ORM 6 |
+| Auth | Passport (JWT access token + refresh token), Argon2 hashing |
+| Validation | class-validator / class-transformer |
+| File uploads | Multer (disk storage) |
+| Email | Resend |
+| Dates / Timezones | moment-timezone |
+| Deployment | Docker, AWS EC2, GitHub Actions + AWS SSM |
 
-```bash
-$ npm install
+---
+
+## Features
+
+### Inventory Management
+- Hierarchical property inventory: **Project → Phase → Block → Lot**
+- Lot and phase status tracking (e.g. available, reserved, sold, full slot)
+- Middleware-level duplicate checks for project, phase, block, and lot names
+
+### Sales Workflow
+- **Clients:** client records with document uploads
+- **Reservations:** holding and reservation fees, validity periods, forfeiture handling
+- **Contracts:** cash or installment terms, down payments (full or partial), forfeiture and deletion flows
+- **Payments:** monthly installments, down payments, full payments, survey fees, and other transaction types
+  - Late payment penalties with optional waiver
+  - Auto-generated receipt numbers (PostgreSQL function)
+  - Proof-of-payment uploads
+  - Payment breakdowns and history per contract
+- **Agents & Commissions:** commission rates per contract, commission release tracking, and breakdown/history views
+
+### Role-Based Access & Approval Workflow
+- Two roles: **Admin** and **Secretary**
+- Per-user **module access** (Projects, Reservations, Clients, Contracts, Users, Audit Trail, etc.)
+- Changes made by a Secretary to sensitive records (payments, contracts, clients, reservations, commissions, files) are saved as **pending requests** that an Admin must approve or reject
+
+### Audit Trail
+- Every core entity has a matching `*Audit` table
+- Audit records are written by **PostgreSQL triggers** (`triggers.sql`), so history is captured at the database level regardless of which code path made the change
+- Triggers also manage `approvedAt`, `rejectedAt`, and `deletedAt` timestamps automatically
+
+### Authentication & Security
+- Short-lived JWT access tokens (Bearer) and refresh tokens stored in **httpOnly cookies**
+- Refresh tokens are **hashed with Argon2** and stored in an `AuthSession` table, bound to the client IP and user agent
+- Passwords hashed with Argon2
+- Global validation pipe with whitelist (unknown fields are stripped)
+- CORS restricted to configured origins
+- Consistent API response envelope and centralized exception handling via a global interceptor and filter
+
+---
+
+## Project Structure
+
+```
+src/
+├── auth/               # Login, logout, refresh token rotation
+├── user/               # Admin & secretary accounts, module access
+├── project/            # Projects, phases, blocks, lots
+├── client/             # Client records
+├── reservation/        # Reservations and fees
+├── contract/           # Contracts, terms, forfeiture
+├── payment/            # Payments, penalties, receipts, breakdowns
+├── agent/              # Sales agents
+├── agent-commission/   # Commission computation and release
+├── request/            # Approval workflow (approve / reject requests)
+├── audit/              # Audit trail queries
+├── file/               # File and document management
+├── email/              # Email sending (Resend)
+├── settings/           # User preferences
+├── health/             # Health check endpoint
+├── middleware/         # Duplicate and validation checks per module
+├── services/           # Shared services: Prisma, JWT, guards, strategies,
+│                       # interceptors, uploads, formatting, timezone helpers
+├── config/             # Environment-based configuration
+└── main.ts
+
+prisma/
+├── schema.prisma       # Data model (~30 models)
+└── migrations/
+
+triggers.sql            # Audit and timestamp triggers
+functions.sql           # Database functions (e.g. receipt number generation)
 ```
 
-## Compile and run the project
+---
 
-```bash
-# development
-$ npm run start
+## Suggested Starting Points for Review
 
-# watch mode
-$ npm run start:dev
+- **Data model:** `prisma/schema.prisma`
+- **Auth flow & refresh token sessions:** `src/auth/auth.service.ts`, `src/services/strategy/strategy.service.ts`, `src/services/jwt/jwt.service.ts`
+- **Role guard:** `src/services/guard/guard.service.ts`
+- **Payment logic (penalties, breakdowns, transactions):** `src/payment/payment.service.ts`
+- **Approval workflow:** `src/request/request.service.ts`
+- **Database-level auditing:** `triggers.sql`
+- **Response/error handling:** `src/services/interceptor/interceptor.service.ts`
 
-# production mode
-$ npm run start:prod
-```
+---
 
-## Run tests
+## Deployment (Production)
 
-```bash
-# unit tests
-$ npm run test
+The production version runs in Docker on AWS EC2. Pushes to the release branches trigger a GitHub Actions workflow that uses AWS Systems Manager (SSM) to pull the latest code and rebuild the containers on the server. The deployment workflow and Docker files are not included in this repository.
 
-# e2e tests
-$ npm run test:e2e
+---
 
-# test coverage
-$ npm run test:cov
-```
+## Author
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+**James Ryan Pagal**
+- GitHub: [@jamesryanpagal](https://github.com/jamesryanpagal)
+- LinkedIn: [jamesryanpagal](https://www.linkedin.com/in/james-ryan-pagal-293a691ba/)
+- Portfolio: [opterna](https://www.opterna.cloud/)
